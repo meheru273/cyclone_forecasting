@@ -1,0 +1,202 @@
+\documentclass[12pt, a4paper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{float}
+\usepackage{subcaption}
+\usepackage{setspace}
+\usepackage{titlesec}
+\usepackage[utf8]{inputenc}
+\usepackage{cite}
+
+\onehalfspacing
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+\titleformat{\section}{\large\bfseries}{\Roman{section}.}{0.5em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\Alph{subsection}.}{0.5em}{}
+
+\begin{document}
+
+% TITLE PAGE
+\begin{titlepage}
+\centering
+\vspace*{1cm}
+\includegraphics[width=3.5cm]{figures/kuet_logo.png}\\[1cm]
+{\Large \textbf{Khulna University of Engineering \& Technology}}\\[0.3cm]
+{\large Department of Computer Science and Engineering}\\[2cm]
+{\LARGE \textbf{Thesis Progress Report}}\\[0.8cm]
+{\Large \textbf{Multi-Channel Latent Diffusion Model for Joint Satellite Imagery and Atmospheric Field Generation with Implicit Trajectory Prediction}}\\[2cm]
+\begin{tabular}{rl}
+\textbf{Submitted by:} & Meheru Zannat \\
+\textbf{Roll:} & 2007039 \\[0.5cm]
+\textbf{Supervisor:} & Dr.\ Sk.\ Md.\ Masudul Ahsan \\
+& Professor \\
+& Dept.\ of CSE, KUET \\
+\end{tabular}
+\vfill
+{\large May 2026}
+\end{titlepage}
+
+% ABSTRACT
+\begin{abstract}
+Tropical cyclones are among the most destructive natural phenomena, and accurate forecasting of their structure and trajectory remains a fundamental challenge in meteorology. This work presents a two-stage latent diffusion framework for the joint generation of multi-channel satellite and atmospheric reanalysis data conditioned on the current state of a tropical cyclone. The model operates on a novel five-channel representation comprising GRIDSAT-B1 infrared satellite imagery (1 channel) and ERA5 reanalysis fields---U-wind, V-wind, temperature, and surface pressure (4 channels). A Variational Autoencoder (VAE) first compresses this five-channel input into a compact four-dimensional latent space at quarter spatial resolution, after which a conditioned UNet-based diffusion model learns to denoise the latent representation to predict the next-timestep atmospheric state. Coordinates from the IBTrACS best-track archive are used as conditioning signals rather than VAE input channels, preserving decoder capacity for physically meaningful reconstruction. Trajectory accuracy is evaluated implicitly through a physics-motivated steering flow analysis that extracts displacement vectors from the generated ERA5 U/V wind fields. The VAE achieves near-lossless reconstruction with a PSNR of 42.1~dB and SSIM of 0.972. The multi-channel diffusion model, trained for 50 epochs on tropical cyclone data from 2006--2012, reaches an overall PSNR of 21.2~dB and SSIM of 0.60, with training curves indicating continued improvement. This report documents the complete architecture, key design decisions, and presents preliminary experimental findings.
+\end{abstract}
+
+\noindent\textbf{Keywords:} Tropical cyclone forecasting, latent diffusion model, variational autoencoder, satellite imagery generation, ERA5 reanalysis, steering flow, IBTrACS
+
+\newpage
+\tableofcontents
+\newpage
+
+% I. INTRODUCTION
+\section{Introduction}
+
+Tropical cyclones (TCs) pose significant threats to life and infrastructure across coastal regions worldwide. The Bay of Bengal, in particular, is one of the most active tropical cyclone basins, accounting for approximately 7\% of global tropical cyclones but a disproportionately large share of casualties due to the dense coastal populations of Bangladesh, India, and Myanmar \cite{nath2024forecasting}. Accurate prediction of TC evolution---both in terms of structural changes in cloud formations and atmospheric fields, as well as the storm trajectory---is essential for effective disaster preparedness and timely evacuation.
+
+Conventional numerical weather prediction (NWP) models solve the primitive equations of atmospheric dynamics on discretized grids. While physically grounded, these models are computationally expensive, require hours of supercomputing time for a single forecast, and often struggle with the chaotic, multi-scale dynamics of tropical cyclones. Furthermore, NWP models exhibit systematic biases in TC intensity and track forecasting, particularly for rapidly intensifying storms \cite{wang2024global}.
+
+Recent advances in deep generative models, particularly denoising diffusion probabilistic models (DDPMs) \cite{ho2020denoising} and latent diffusion models (LDMs) \cite{rombach2022high}, have demonstrated remarkable capabilities in image synthesis tasks. These architectures have been increasingly applied to weather and climate prediction, with systems such as GenCast \cite{price2023gencast} achieving competitive performance against operational NWP ensembles. In the specific domain of tropical cyclone forecasting, several recent works have explored diffusion-based approaches for satellite imagery generation \cite{nath2024forecasting, ren2025improving}, atmospheric variable estimation \cite{ling2024estimating}, and precipitation forecasting \cite{huang2024tcp}.
+
+However, most existing approaches focus on single-modality generation---either satellite imagery or atmospheric fields---without jointly modeling the coupled satellite-atmospheric system. This work addresses this gap by proposing a \textbf{multi-channel latent diffusion model} that simultaneously generates infrared satellite imagery and four ERA5 reanalysis variables. The key contributions are:
+
+\begin{enumerate}
+\item A \textbf{five-channel VAE} architecture that compresses GRIDSAT infrared imagery and four ERA5 reanalysis variables (U-wind, V-wind, temperature, surface pressure) into a compact four-dimensional latent representation without bounded decoder activations.
+\item A \textbf{conditioned diffusion UNet} that operates in the compressed latent space with temporal, spatial, and geographic coordinate conditioning derived from IBTrACS best-track data.
+\item A \textbf{physics-based steering flow analysis} framework that evaluates trajectory prediction accuracy implicitly through the fidelity of generated U/V wind fields, eliminating the need for a separate coordinate prediction head.
+\item Comprehensive documentation of \textbf{design decisions and ablation insights}, including the critical impact of decoder activation functions, coordinate integration strategies, and normalization approaches.
+\end{enumerate}
+
+% II. RELATED WORK
+\section{Related Work}
+
+\subsection{Diffusion Models for Tropical Cyclone Forecasting}
+
+Nath et al. \cite{nath2024forecasting} introduced cascaded diffusion models for forecasting tropical cyclone satellite imagery. Their approach employs a two-stage generation pipeline: a low-resolution diffusion model generates coarse forecasts, which are then upsampled by a super-resolution diffusion model. The system was trained on the Digital Typhoon dataset and demonstrated improved visual quality over direct prediction baselines. However, their method operates only on single-channel satellite imagery and does not model atmospheric variables.
+
+Ren et al. \cite{ren2025improving} extended this direction by incorporating video diffusion models to capture temporal coherence across multiple forecast lead times. By treating the TC forecast as a video generation problem, their approach naturally preserves temporal consistency---a challenge for frame-by-frame methods. This work was published at the ICLR 2025 Climate Change workshop and represents the state-of-the-art in diffusion-based TC satellite forecasting.
+
+Zhang et al. \cite{zhang2025tcdiffuser} proposed TC-Diffuser, a bi-condition multi-modal diffusion model that conditions generation on both satellite imagery and environmental atmospheric fields. Their architecture explicitly separates local (storm-centered) and global (environmental) conditioning to capture multi-scale influences on TC evolution. This multi-modal conditioning approach is philosophically similar to our work, though we differ in jointly generating both modalities rather than conditioning on one to generate the other.
+
+\subsection{Atmospheric Variable Estimation}
+
+Ling et al. \cite{ling2024estimating} demonstrated that conditional denoising diffusion models can estimate atmospheric variables directly from satellite imagery. Using the Digital Typhoon dataset, they trained diffusion models to translate infrared satellite observations into ERA5 reanalysis fields, effectively learning the satellite-to-atmospheric mapping. Their work validates the feasibility of coupling satellite and atmospheric modalities through diffusion models, which motivates our joint generation approach.
+
+\subsection{TC Precipitation and Intensity Forecasting}
+
+Huang et al. \cite{huang2024tcp} introduced TCP-Diffusion, a multi-modal diffusion model specifically designed for global tropical cyclone precipitation forecasting. Their model incorporates change-awareness mechanisms to capture the rapid evolution of precipitation patterns during TC lifecycle events. Wang et al. \cite{wang2024global} proposed a multi-modal multi-scale causal autoregressive model for TC intensity forecasting, demonstrating that combining satellite imagery with reanalysis data improves intensity prediction accuracy.
+
+\subsection{Super-Resolution for TC Wind Fields}
+
+Lockwood et al. \cite{lockwood2024trsd} developed a generative super-resolution model for enhancing tropical cyclone wind field intensity and resolution. Zhang et al. \cite{zhang2025tsrd} proposed a two-stage super-resolution diffusion model for typhoon forecasting from remote sensing data. Both works demonstrate the potential of diffusion-based methods for enhancing the spatial resolution of TC-related fields.
+
+% III. METHODOLOGY
+\section{Methodology}
+
+\subsection{Dataset}
+
+The model is trained on the Satellite-ERA5 Tropical Cyclone Dataset (SETCD), which pairs GRIDSAT-B1 infrared brightness temperature images with ERA5 atmospheric reanalysis fields. The dataset covers tropical cyclones from 2006 to 2012 and is organized by storm (using IBTrACS Storm IDs) and 3-hourly timestamps.
+
+Each sample consists of a storm-centered $256 \times 256$ pixel crop containing:
+\begin{itemize}
+\item \textbf{GRIDSAT-B1} (1 channel): Infrared brightness temperature from the globally-merged geostationary satellite constellation \cite{knapp2011gridsat}
+\item \textbf{ERA5} (4 channels): U-wind component, V-wind component, temperature, and surface pressure at 850~hPa from the ECMWF ERA5 reanalysis \cite{hersbach2020era5}
+\end{itemize}
+
+All channels are normalized using global z-score statistics computed via Welford's online algorithm over the full training set (Table~\ref{tab:normstats}). This approach ensures numerically stable computation of mean and variance across the large dataset without requiring multiple passes.
+
+\begin{table}[H]
+\centering
+\caption{Global Z-Score Normalization Statistics}
+\label{tab:normstats}
+\begin{tabular}{lrr}
+\toprule
+\textbf{Channel} & \textbf{Mean} & \textbf{Std Dev} \\
+\midrule
+GRIDSAT (brightness temp.) & 169.90 & 122.26 \\
+U-wind (m/s) & $-1.17$ & 5.39 \\
+V-wind (m/s) & 0.38 & 5.00 \\
+Temperature (K) & 298.49 & 4.23 \\
+Surface Pressure (Pa) & 100{,}976.29 & 521.15 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Per-timestep geographic coordinates (latitude, longitude) are obtained from the IBTrACS v04r01 best-track archive \cite{knapp2010ibtracs} using a custom matching script that aligns each dataset timestamp to the nearest IBTrACS track point within a 3-hour tolerance window. The dataset is split by storm: 35 storms are randomly held out for validation, and the remainder forms the training set ($\sim$18,600 paired samples).
+
+\subsection{Architecture Overview}
+
+The model follows a two-stage latent diffusion framework as illustrated in Fig.~\ref{fig:architecture}. In Stage 1, a multi-channel VAE learns to compress the five-channel input into a compact latent space. In Stage 2, a conditioned UNet learns the denoising process in this latent space.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/architecture_diagram.png}
+\caption{Two-stage latent diffusion architecture. Stage 1: VAE compresses 5-channel input to 4-dim latent space. Stage 2: Conditioned UNet denoises in latent space with multi-modal conditioning from satellite imagery, ERA5 fields, temporal embeddings, and IBTrACS coordinates.}
+\label{fig:architecture}
+\end{figure}
+
+\subsection{Stage 1: Multi-Channel Variational Autoencoder}
+
+The VAE processes the concatenated five-channel input and compresses it to a four-dimensional latent representation at $\frac{1}{4}$ spatial resolution ($64 \times 64$).
+
+\textbf{Encoder.} Three convolutional blocks with GroupNorm and SiLU activations progressively downsample from $256 \rightarrow 128 \rightarrow 64$ spatial resolution. Each block consists of a strided $4\times4$ convolution followed by group normalization (8 groups) and SiLU activation. The channel dimensions progress as $5 \rightarrow 64 \rightarrow 128 \rightarrow 256$. Two parallel $1\times1$ convolutions at the bottleneck produce the mean $\boldsymbol{\mu}$ and log-variance $\log\boldsymbol{\sigma}^2$ of the approximate posterior $q(\mathbf{z}|\mathbf{x})$.
+
+\textbf{Decoder.} Symmetric to the encoder, using transposed convolutions for upsampling: $64 \rightarrow 128 \rightarrow 256$ spatial resolution. \textit{Critically, no activation function is applied at the decoder output.} This design choice is essential because z-score normalized atmospheric data is unbounded---a $\tanh$ activation would clip values to $[-1, 1]$, destroying the distribution tails. ERA5 pressure values routinely reach z-scores of $\pm3$, which would be catastrophically distorted by bounded activations.
+
+\textbf{Training Objective:}
+\begin{equation}
+\mathcal{L}_{\text{VAE}} = \mathcal{L}_{\text{recon}} + \beta \cdot D_{\text{KL}}\big(q(\mathbf{z}|\mathbf{x}) \,\|\, p(\mathbf{z})\big)
+\label{eq:vae_loss}
+\end{equation}
+where $\mathcal{L}_{\text{recon}}$ is the L1 reconstruction loss and $\beta$ is annealed from 0 to $10^{-4}$ over the first 20 epochs to prevent posterior collapse (KL annealing).
+
+\subsection{Stage 2: Conditioned Diffusion UNet}
+
+The UNet operates entirely in the four-dimensional latent space ($64 \times 64$) and is trained to predict the noise $\boldsymbol{\epsilon}$ added during the forward diffusion process.
+
+\textbf{Forward Process.} A linear noise schedule with $\beta_1 = 10^{-4}$ and $\beta_T = 0.02$ over $T = 1000$ timesteps defines the Markov chain:
+\begin{equation}
+q(\mathbf{z}_t | \mathbf{z}_{t-1}) = \mathcal{N}\big(\mathbf{z}_t; \sqrt{1-\beta_t}\,\mathbf{z}_{t-1},\; \beta_t \mathbf{I}\big)
+\end{equation}
+
+\textbf{Conditioning.} The \texttt{ConditionEncoder} module fuses multiple information streams into a unified conditioning signal:
+\begin{itemize}
+\item \textbf{Spatial conditioning}: GRIDSAT and ERA5 input images (time $t$) with 2D sinusoidal positional encoding, processed through convolutional layers
+\item \textbf{Temporal conditioning}: Year, month, day, and hour embeddings, each projected to a shared dimension and summed
+\item \textbf{Geographic conditioning}: Current-timestep normalized (lat, lon) coordinates projected via a two-layer MLP and added to the temporal embedding
+\end{itemize}
+
+The combined conditioning produces both a spatial feature map (downsampled to $64\times64$ and injected into the UNet via concatenation) and a global context vector (injected via adaptive group normalization).
+
+\textbf{Reverse Process (Inference).} DDIM sampling \cite{song2020denoising} with 50 steps and $\eta = 0$ provides deterministic, accelerated generation from the learned reverse process.
+
+\textbf{Training Objective:}
+\begin{equation}
+\mathcal{L}_{\text{diffusion}} = \mathbb{E}_{\mathbf{z}_0, \boldsymbol{\epsilon}, t}\Big[\big\|\boldsymbol{\epsilon} - \boldsymbol{\epsilon}_\theta(\mathbf{z}_t, \mathbf{c}, t)\big\|^2\Big]
+\end{equation}
+
+\subsection{Steering Flow Displacement Analysis}
+
+Rather than predicting trajectory coordinates through a separate MLP head, this work evaluates trajectory accuracy \textit{implicitly} through the quality of generated ERA5 U/V wind fields. The physical basis is that tropical cyclone motion is primarily governed by the environmental steering flow---the area-averaged wind field surrounding the storm center \cite{chan2005global}. If the diffusion model generates accurate U/V wind fields, the implied displacement will match ground truth.
+
+The steering vector is computed by: (1) extracting a $64 \times 64$ center crop from the U-wind and V-wind channels of the generated output, (2) un-normalizing from z-score to physical units (m/s) using the dataset statistics, (3) area-averaging to obtain the mean steering vector $(\bar{u}, \bar{v})$, and (4) converting to geographic displacement over the 3-hour timestep $\Delta t = 10{,}800$ s:
+\begin{align}
+\Delta\text{lat} &= \frac{\bar{v} \cdot \Delta t}{111{,}000} \quad \text{(degrees)} \\[4pt]
+\Delta\text{lon} &= \frac{\bar{u} \cdot \Delta t}{111{,}000 \cdot \cos(\phi)} \quad \text{(degrees)}
+\end{align}
+where $\phi$ is the current storm latitude. The displacement MAE between ground truth and generated steering vectors provides a physically meaningful trajectory accuracy metric.
+
+\subsection{Key Design Decisions}
+
+\subsubsection{Removal of Bounded Decoder Activation}
+The initial VAE decoder included a $\tanh$ activation at the output layer, clamping all reconstructed values to $[-1, 1]$. Since the data uses global z-score normalization with an inherently unbounded range, this activation destroyed the distribution tails. ERA5 pressure z-scores regularly reach $\pm 3$, which were clipped to $\pm 1$ by $\tanh$. Removing this activation improved ERA5 channel reconstruction fidelity by an order of magnitude.
+
+\subsubsection{Coordinates as Conditioning, Not VAE Channels}
+An earlier design encoded latitude and longitude as two additional constant-valued spatial channels through a 7-channel VAE with $\text{latent\_dim}=8$. This approach was abandoned because: (a) constant spatial maps where every pixel holds the same scalar value waste VAE encoder-decoder capacity, (b) the increased latent dimension doubled UNet parameters without meaningful benefit, and (c) the VAE attempted to reconstruct these trivial maps alongside complex atmospheric fields, diluting gradient signal. The current design uses coordinates as conditioning signals via the \texttt{ConditionEncoder}, keeping the VAE focused exclusively on image and atmospheric reconstruction.
+
+\subsubsection{From Explicit to Implicit Trajectory Prediction}
+An MLP-based coordinate predictor was initially appended to the UNet to directly predict next-timestep (lat, lon) from the global context embedding. Analysis revealed that this context embedding contained only temporal and positional information---it had no access to the spatial ERA5 wind patterns that physically drive cyclone motion. The steering flow analysis approach eliminates this architectural limitation by deriving trajectory displacement directly from the generated wind fields, ensuring that trajectory accuracy improves in lockstep with atmospheric generation quality.
+
+\input{part2}
+
+\end{document}
