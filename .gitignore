@@ -4,3 +4,13 @@ forecast-video-diffmodels-main
 outputs
 results
 logs
+*.zip
+*.pptx
+__pycache__/
+*.pyc
+.DS_Store
+*.npy
+*.nc
+cache/
+
+

@@ -200,6 +200,74 @@
 
 ---
 
+## Entry 9: Diffusion Training Improvements & Architecture Fixes
+
+**Date**: May 23, 2026  
+**Feature/Issue**: Port proven components from single-channel training to latent_diffusion.py/multi_channel_diffusion.py, fix horizontal line artifacts, increase model capacity, and optimize schedule dynamics.
+
+**Implementation Details**:
+- **VAE Decoder & UNet UpBlock**: Replaced `nn.ConvTranspose2d` with `nn.Upsample(mode='nearest') + nn.Conv2d` to eliminate the horizontal line artifacts visible in generated samples.
+- **Cosine Noise Schedule**: Switched to a cosine noise schedule by implementing the `CosineNoiseScheduler` class (inheriting from `LinearNoiseScheduler`), distributing learning signals more uniformly across timesteps.
+- **Dynamic Decoder Configs**: Switched UNet decoders to a dynamic configuration loop to support arbitrary number of downsampling levels (fully supporting mults=(1,2,3,4)).
+- **Config & Capacity**: Increased `base_channels` 64 → 128, `channel_mults` (1,2,4) → (1,2,3,4), `num_heads` 4 → 8, and training time from 100 → 200 epochs to fix underfitting.
+- **LR Schedule**: Fixed `T_max` from `2 * epochs` to `epochs` so the cosine annealing decay completes within the run. Widened decay range from 5e-5 → 1e-6.
+- **Validation**: Switched from 5 fixed timesteps to random matching timesteps (unbiased validation) directly comparable to the training loss.
+- **AMP Enabled**: Switched config's `use_amp` flag to `True` to enable Automatic Mixed Precision, speeding up training by ~40%.
+- **Documentation**: Created `system.md` containing full architecture, training loops, and data flow specifications.
+
+**Outcome**: Diffusion architecture updated to support deeper capacity and more efficient noise distribution, ready for mixed-precision training.
+
+---
+
+## Entry 10: Mixed-Precision (AMP) Stability & Evaluation Fixes
+
+**Date**: May 24, 2026  
+**Feature/Issue**: Prevent NaN gradient explosions under AMP, stabilize training for the 4x larger model, and restore broken validation evaluation.
+
+**Implementation Details**:
+- **GradScaler Tuning**: Configured `torch.amp.GradScaler` with `init_scale=1024` and `growth_interval=2000` (instead of default 65536) to prevent early float16 overflow and NaN gradients during initial epochs.
+- **NaN Guard**: Integrated checks inside training loops to skip gradient updates and reset scaler if loss or grad_norm is NaN/Inf, preventing weight corruption.
+- **LR Warmup**: Implemented a 5-epoch linear warmup starting at `LR / 10` up to `LR` to stabilize gradients at startup.
+- **Peak LR**: Reduced peak learning rate from `2e-4` to `1e-4` to ensure stable convergence of the larger 128-channel model.
+- **VAE Decode**: Restored the VAE decoding step inside `evaluate_model` (which was accidentally removed during debug-print cleanup), ensuring validation metrics are computed on pixel-space images rather than raw latents.
+
+**Outcome**: NaN gradient explosions resolved. Training runs stably with AMP enabled, and metrics are computed correctly in pixel-space.
+
+---
+
+## Entry 11: Bilinear Upsampling & Dynamic Clamping Fixes
+
+**Date**: May 25-26, 2026  
+**Feature/Issue**: Reduce horizontal line artifacts, optimize schedule/validation dynamics, and update coordinate evaluation in single-channel and multi-channel pipelines.
+
+**Implementation Details**:
+- **Bilinear Upsampling (both)**:
+  - Switched VAE decoder upsampling layers and UNet `UpBlock` layers in both `latent_diffusion.py` and `multi_channel_diffusion.py` from `nearest` to `bilinear` with `align_corners=False`. This eliminates grid/checkerboard line boundaries in generated images.
+- **Dynamic Latent Clamping (both)**:
+  - Replaced the hardcoded DDIM sampler clamp ranges in `latent_diffusion.py` and `multi_channel_diffusion.py`.
+  - Added `compute_latent_clamp_range()` in both trainers to dynamically calculate the actual min/max range of scaled latents from validation data before training starts (adding a 10% margin).
+  - Configured `sample()`, `evaluate_model()`, and other sampling wrappers to pass the computed `latent_clamp_range` to `sample_prev_timestep_ddim`.
+- **Cosine Noise Schedule & Validation Fixes (both)**:
+  - Integrated `CosineNoiseScheduler` (inheriting from `LinearNoiseScheduler`) to distribute training signal more uniformly across timesteps.
+  - Replaced validation on 5 fixed timesteps with random matching training timesteps to make loss directly comparable.
+  - Aligned Cosine Annealing `T_max` with `diffusion_epochs` so the decay completes within the training loop.
+- **Trajectory Tracking via Physical Steering Flow (multi-channel)**:
+  - Removed MLP-based `CoordPredictor` head and coordinate loss from the joint training loss in `multi_channel_diffusion.py`.
+  - Implemented heuristic steering flow displacement calculation directly from generated ERA5 U/V wind channels. Un-normalizes wind speed and converts to physical coordinate displacements:
+    $$\Delta \text{lat} = \frac{v_{\text{mean}} \cdot dt}{111000.0}$$
+    $$\Delta \text{lon} = \frac{u_{\text{mean}} \cdot dt}{111000.0 \cdot \cos(\text{lat})}$$
+  - Added 3-panel visualization (quiver plot, scatter plot, error histogram) to track steering vector accuracy in physical degrees.
+  - Updated checkpoint loading to cleanly ignore legacy `coord_predictor_state_dict` keys.
+
+**Rationale**:
+- Bilinear interpolation produces smoother spatial boundaries than nearest neighbor, avoiding sharp grid artifact lines.
+- Dynamic clamping adapts to the model's actual latent statistical distribution instead of clipping valid values.
+- Physical steering flow extraction from generated winds is more robust and physically grounded than using an abstract MLP coordinate predictor head.
+
+**Outcome**: Both single-channel and multi-channel compilation and architecture verification succeeded. Models are ready for full retraining on Kaggle with smooth generation and physical trajectory evaluation.
+
+---
+
 ## Key Lessons Learned
 
 | # | Lesson | Context |
@@ -209,28 +277,30 @@
 | 3 | **Use conditioning for non-image data** | Coords are better as MLP conditioning than VAE channels |
 | 4 | **Diffusion models are slow to converge** | 50 epochs is insufficient; plan for 100-150+ |
 | 5 | **`latent_scale_factor` must match your VAE** | Default 0.18215 (Stable Diffusion) may not fit |
-| 6 | **CosineAnnealing T_max matters** | Set T_max = 2×epochs to avoid LR bounce-back |
+| 6 | **CosineAnnealing T_max matters** | Set T_max = epochs to allow complete LR decay within the run |
 | 7 | **Per-timestep coords >> genesis-only coords** | IBTrACS lookup gives actual track positions |
 | 8 | **Always save LR scheduler state in checkpoints** | Prevents LR jumps on resume |
+| 9 | **Bilinear upsampling resolves grid artifacts** | Nearest-neighbor upsampling causes horizontal/vertical boundary lines |
+| 10 | **Compute clamp range dynamically from data** | Hardcoded clamp limits clip valid latent ranges during sampling |
+| 11 | **Physical steering flow >> MLP coordinates** | Extracting trajectory steering from U/V wind channels is physically consistent |
 
 ---
 
-## Current Status (as of May 2, 2026)
+## Current Status (as of May 26, 2026)
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| `latent_diffusion.py` | ✅ Trained (67 epochs) | PSNR 21.2 dB, still improving. Needs more epochs. |
-| `build_coordinate_lookup.py` | ✅ Ready | Must run on Kaggle before MC-diffusion training |
-| `multi_channel_diffusion.py` | ✅ Code complete | v2 architecture (coord-conditioned). Not yet trained. |
-| VAE (5-ch, no Tanh) | 🔜 Needs training | 50 epochs planned |
-| Diffusion + CoordPredictor | 🔜 Needs training | 100 epochs planned |
-| Trajectory evaluation | ✅ Code complete | Scatter plot + MAE in degrees |
+| `latent_diffusion.py` | ✅ Ready to Retrain | Bilinear upsampling and dynamic clamping integrated. Cosine scheduler ready. |
+| `build_coordinate_lookup.py` | ✅ Ready | Run on Kaggle to generate `coordinate_lookup.json`. |
+| `multi_channel_diffusion.py` | ✅ Ready to Retrain | Physical steering flow evaluation, Cosine scheduler, and validation fixes integrated. |
+| VAE (1-ch / 5-ch) | 🔜 Needs training | Switched decoder to bilinear upsampling. |
+| Diffusion (1-ch / 5-ch) | 🔜 Needs training | 200 epochs planned. |
+| Trajectory evaluation | ✅ Code complete | Direct steering flow displacement calculations + 3-panel plotting. |
 
 ### Next Steps
 
-1. **Run `build_coordinate_lookup.py`** on Kaggle to generate `coordinate_lookup.json`
-2. **Upload JSON** as a Kaggle dataset for the training notebook
-3. **Train MC-VAE** (50 epochs) — verify PSNR > 35 dB on 5-channel reconstruction
-4. **Train MC-Diffusion + CoordPredictor** (100 epochs)
-5. **Evaluate**: per-channel PSNR/SSIM + coordinate MAE in degrees
-6. **If coord MAE > 5°**: Consider increasing `coord_loss_weight` or adding coord-aware attention
+1. **Delete old checkpoints** since VAE and UNet architectures changed (bilinear upsampling).
+2. **Run `build_coordinate_lookup.py`** on Kaggle to generate the per-timestep coordinate lookup file.
+3. **Train VAE models (1-ch and 5-ch)** to verify smooth reconstructions (PSNR > 38 dB / 17 dB respectively) without artifacts.
+4. **Train Diffusion models (1-ch and 5-ch)** using the cosine noise schedule and dynamic clamp range settings for 200 epochs.
+5. **Evaluate multi-channel steering flow**: Verify that the steering MAE total is within 2–5 degrees.

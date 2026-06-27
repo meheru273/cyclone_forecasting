@@ -1,0 +1,8 @@
+[
+  {
+    "run_id": "R4_nath_cascaded_diffusion",
+    "description": "Nath et al. \u2014 cascaded DDPM (our setting)",
+    "per_leadtime_csv": "E:\\thesis_2007039\\outputs\\cascaded_diffusion_R4\\metrics\\per_leadtime.csv",
+    "sampler_steps_csv": "E:\\thesis_2007039\\outputs\\cascaded_diffusion_R4\\metrics\\sampler_steps.csv"
+  }
+]
