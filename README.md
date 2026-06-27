@@ -5,7 +5,7 @@ A latent generative model that forecasts tropical-cyclone state — joint **GRID
 The headline model is a multi-frame **rectified-flow** generator operating in a 4-channel latent space learned by a multi-channel VAE. It takes 3 past frames at native 3-hour cadence and produces 3 future frames jointly across all 5 physical channels, conditioned on storm best-track coordinates from IBTrACS.
 
 > Undergraduate thesis project · Khulna University of Engineering & Technology (KUET).
-> Author: **Mofazzal Hossen** · [mofazzalhossen875@gmail.com](mailto:mofazzalhossen875@gmail.com)
+> Author: **Meheru Zannat** · [meherujannat@gmail.com](mailto:meherujannat@gmail.com)
 
 ---
 
